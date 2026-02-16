@@ -301,7 +301,7 @@ wheels = [
 [[package]]
 name = "simplesampler"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "mido", extra = ["ports-rtmidi"] },
     { name = "numpy" },

@@ -398,8 +398,11 @@ class Application(App):
         self._midi_thread.start()
         return True
 
-    def _switch_midi_device(self, port_name: str) -> None:
+    def _switch_midi_device(self, port_name: str | None) -> None:
         """Handle result from MidiDeviceScreen. Switch to the chosen device or disconnect."""
+        if port_name is None:
+            return  # User cancelled (Escape) — no change
+
         # Stop existing listener first
         self._stop_midi_listener()
 
