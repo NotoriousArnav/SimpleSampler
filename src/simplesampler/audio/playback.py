@@ -1,91 +1,100 @@
-import pyaudio
+import sounddevice as sd
 import wave
 import numpy as np
-import threading
-from typing import Optional, Dict, List, Tuple
+from collections import deque
+from typing import List, Dict
 import os
+import sys
 
 
 class AudioPlayer:
     RATE = 44100
     CHANNELS = 2
-    CHUNK = 1024
+    BLOCKSIZE = 256  # ~5.8ms at 44100 Hz
 
     def __init__(self):
-        self.pa = pyaudio.PyAudio()
-        self.lock = threading.Lock()
-        self.active_voices: List[Dict] = []
+        # Lock-free pending queue: play_data() appends here,
+        # callback drains into its own local list each cycle.
+        self._pending: deque = deque()
+        self._voices: List[Dict] = []
 
-        # Open a single persistent stream
-        self.stream = self.pa.open(
-            format=pyaudio.paFloat32,
+        self.stream = sd.OutputStream(
+            samplerate=self.RATE,
+            blocksize=self.BLOCKSIZE,
             channels=self.CHANNELS,
-            rate=self.RATE,
-            output=True,
-            frames_per_buffer=self.CHUNK,
-            stream_callback=self._callback,
+            dtype="float32",
+            latency="low",
+            callback=self._callback,
         )
-        self.stream.start_stream()
+        self.stream.start()
+
+        latency_ms = self.stream.latency * 1000
+        print(f"Audio output latency: {latency_ms:.1f}ms", file=sys.stderr)
 
     def play_data(self, data: np.ndarray):
-        """Adds a numpy audio buffer to the active voices list."""
+        """Adds a numpy audio buffer to the pending voice queue (lock-free)."""
         if data is None or len(data) == 0:
             return
-
-        with self.lock:
-            self.active_voices.append({"data": data, "idx": 0})
+        # deque.append is atomic in CPython — no lock needed
+        self._pending.append({"data": data, "idx": 0})
 
     def play_wave_file(self, file_path: str):
-        """Loads and plays a wav file immediately (blocking load, immediate play)."""
+        """Loads and plays a wav file immediately."""
         if not os.path.exists(file_path):
-            print(f"File not found: {file_path}")
+            print(f"File not found: {file_path}", file=sys.stderr)
             return
         data = self.load_wav(file_path)
         self.play_data(data)
 
     def cleanup(self):
-        """Stops and closes the audio stream and PyAudio instance."""
-        if self.stream.is_active():
-            self.stream.stop_stream()
+        """Stops and closes the audio stream."""
+        self.stream.stop()
         self.stream.close()
-        self.pa.terminate()
 
-    def _callback(self, in_data, frame_count, time_info, status):
-        # Create an empty output buffer
-        out_data = np.zeros((frame_count, self.CHANNELS), dtype=np.float32)
+    def _callback(self, outdata: np.ndarray, frames: int, time, status):
+        if status:
+            print(f"Audio status: {status}", file=sys.stderr)
 
-        with self.lock:
-            # Iterate backwards so we can remove finished voices easily
-            for i in range(len(self.active_voices) - 1, -1, -1):
-                voice = self.active_voices[i]
-                data = voice["data"]
-                idx = voice["idx"]
+        # Drain pending voices into our local list (lock-free reads)
+        while True:
+            try:
+                voice = self._pending.popleft()
+                self._voices.append(voice)
+            except IndexError:
+                break
 
-                # Calculate how much we can read
-                remaining = len(data) - idx
-                to_read = min(frame_count, remaining)
+        # Zero the output buffer
+        outdata[:] = 0.0
 
-                if to_read > 0:
-                    # Add sample data to output
-                    chunk = data[idx : idx + to_read]
-                    out_data[:to_read] += chunk
-                    voice["idx"] += to_read
+        # Mix active voices
+        i = len(self._voices) - 1
+        while i >= 0:
+            voice = self._voices[i]
+            data = voice["data"]
+            idx = voice["idx"]
 
-                # If finished, remove from list
-                if voice["idx"] >= len(data):
-                    self.active_voices.pop(i)
+            remaining = len(data) - idx
+            to_read = min(frames, remaining)
 
-        # Apply global gain to prevent clipping when mixing multiple sounds
-        out_data = out_data * 0.7
+            if to_read > 0:
+                outdata[:to_read] += data[idx : idx + to_read]
+                voice["idx"] += to_read
 
-        # Hard clip to prevent wrapping overflow
-        np.clip(out_data, -1.0, 1.0, out=out_data)
+            # Remove finished voices
+            if voice["idx"] >= len(data):
+                self._voices.pop(i)
 
-        return (out_data.tobytes(), pyaudio.paContinue)
+            i -= 1
+
+        # Global gain to prevent clipping when mixing multiple sounds
+        outdata *= 0.7
+
+        # Hard clip
+        np.clip(outdata, -1.0, 1.0, out=outdata)
 
     def load_wav(self, file_path: str) -> np.ndarray:
         """
-        Loads a WAV file, converts to float32 stereo, and resamples to 44.1kHz.
+        Loads a WAV file, converts to float32 stereo, and resamples to target rate.
         """
         try:
             with wave.open(file_path, "rb") as wf:
@@ -109,9 +118,6 @@ class AudioPlayer:
                     # 24-bit signed
                     raw_bytes = np.frombuffer(raw_data, dtype=np.uint8)
                     chunks = raw_bytes.reshape(-1, 3)
-                    # Pad with 0 at the BEGINNING (Little Endian LSB) -> [0, B0, B1, B2]
-                    # When read as Int32, this becomes (0) + (B0<<8) + (B1<<16) + (B2<<24)
-                    # This shifts the 24-bit data to the upper 24 bits of the 32-bit int, preserving sign.
                     padded = np.pad(chunks, ((0, 0), (1, 0)), mode="constant")
                     audio_int32 = np.frombuffer(padded.tobytes(), dtype=np.int32)
                     audio_float = audio_int32.astype(np.float32) / 2147483648.0
@@ -120,7 +126,6 @@ class AudioPlayer:
 
                 # Reshape channels
                 if channels == 1:
-                    # Mono to Stereo
                     audio_float = np.column_stack((audio_float, audio_float))
                 else:
                     audio_float = audio_float.reshape(-1, channels)
@@ -142,5 +147,5 @@ class AudioPlayer:
                 return audio_float
 
         except Exception as e:
-            print(f"Error loading {file_path}: {e}")
+            print(f"Error loading {file_path}: {e}", file=sys.stderr)
             return np.zeros((0, 2), dtype=np.float32)

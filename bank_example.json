@@ -1,47 +1,54 @@
 {
   "name": "Casio Kit",
+  "midi_device": "POCO X3 Pro",
   "pads": [
     {
       "id": 0, 
       "name": "Kick", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_Kick.wav",
       "color": "red",
-      "keybind": "1"
+      "keybind": "1",
+      "midibind": "note:36:ch9"
     },
     {
       "id": 1, 
       "name": "Snare", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_Snare.wav",
       "color": "green",
-      "keybind": "2"
+      "keybind": "2",
+      "midibind": "note:38:ch9"
     },
     {
       "id": 2, 
       "name": "HiHat C", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_HH_close.wav",
       "color": "yellow",
-      "keybind": "3"
+      "keybind": "3",
+      "midibind": "note:42:ch9"
     },
     {
       "id": 3, 
       "name": "HiHat O", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_HH_open.wav",
       "color": "yellow",
-      "keybind": "4"
+      "keybind": "4",
+      "midibind": "note:50:ch9"
     },
     {
       "id": 4, 
       "name": "Perc 1", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_Perc1.wav",
       "color": "cyan",
-      "keybind": "q"
+      "keybind": "q",
+      "midibind": "note:47:ch9"
     },
     {
       "id": 5, 
       "name": "Perc 2", 
       "sample_path": "/home/arnav/Downloads/[KB6]_Casio_CT-430/[KB6] Casio CT-430/CT-430_Perc2.wav",
       "color": "cyan",
-      "keybind": "w"
+      "keybind": "w",
+      "midibind": "note:43:ch9"
     },
     {
       "id": 6, 
