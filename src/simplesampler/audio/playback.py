@@ -2,25 +2,44 @@ import sounddevice as sd
 import wave
 import numpy as np
 from collections import deque
-from typing import List, Dict
 import os
 import sys
+
+
+class _Voice:
+    """Lightweight voice object for the audio callback hot path.
+
+    Uses __slots__ for fast attribute access — dict key hashing is
+    measurably slower when called thousands of times per second.
+    """
+
+    __slots__ = ("data", "idx")
+
+    def __init__(self, data: np.ndarray):
+        self.data = data
+        self.idx = 0
 
 
 class AudioPlayer:
     RATE = 44100
     CHANNELS = 2
-    BLOCKSIZE = 256  # ~5.8ms at 44100 Hz
+    MAX_VOICES = 64  # Drop oldest voices beyond this limit
 
-    def __init__(self):
+    # Absolute ceiling: ~33ms at 44100 Hz.  Keeps latency bounded
+    # even if the caller passes a huge value.
+    _MAX_BLOCKSIZE = 1456
+
+    def __init__(self, blocksize: int = 256):
+        self.blocksize = min(blocksize, self._MAX_BLOCKSIZE)
+
         # Lock-free pending queue: play_data() appends here,
         # callback drains into its own local list each cycle.
-        self._pending: deque = deque()
-        self._voices: List[Dict] = []
+        self._pending: deque[_Voice] = deque()
+        self._voices: list[_Voice] = []
 
         self.stream = sd.OutputStream(
             samplerate=self.RATE,
-            blocksize=self.BLOCKSIZE,
+            blocksize=self.blocksize,
             channels=self.CHANNELS,
             dtype="float32",
             latency="low",
@@ -36,7 +55,7 @@ class AudioPlayer:
         if data is None or len(data) == 0:
             return
         # deque.append is atomic in CPython — no lock needed
-        self._pending.append({"data": data, "idx": 0})
+        self._pending.append(_Voice(data))
 
     def play_wave_file(self, file_path: str):
         """Loads and plays a wav file immediately."""
@@ -56,33 +75,35 @@ class AudioPlayer:
             print(f"Audio status: {status}", file=sys.stderr)
 
         # Drain pending voices into our local list (lock-free reads)
-        while True:
-            try:
-                voice = self._pending.popleft()
-                self._voices.append(voice)
-            except IndexError:
-                break
+        pending = self._pending
+        voices = self._voices
+        while pending:
+            voices.append(pending.popleft())
+
+        # Enforce voice cap — drop oldest voices first
+        if len(voices) > self.MAX_VOICES:
+            del voices[: len(voices) - self.MAX_VOICES]
 
         # Zero the output buffer
         outdata[:] = 0.0
 
         # Mix active voices
-        i = len(self._voices) - 1
+        i = len(voices) - 1
         while i >= 0:
-            voice = self._voices[i]
-            data = voice["data"]
-            idx = voice["idx"]
+            voice = voices[i]
+            data = voice.data
+            idx = voice.idx
 
             remaining = len(data) - idx
             to_read = min(frames, remaining)
 
             if to_read > 0:
                 outdata[:to_read] += data[idx : idx + to_read]
-                voice["idx"] += to_read
+                voice.idx += to_read
 
             # Remove finished voices
-            if voice["idx"] >= len(data):
-                self._voices.pop(i)
+            if voice.idx >= len(data):
+                voices.pop(i)
 
             i -= 1
 
