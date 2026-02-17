@@ -10,3 +10,4 @@ wheels/
 .venv
 
 *_bank.json
+*_patterns.json

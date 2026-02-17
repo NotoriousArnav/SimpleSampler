@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 simplesampler = "simplesampler.main:main"
+simplesampler-seq = "simplesampler.sequencer.app:main"
 
 [build-system]
 requires = ["hatchling"]
