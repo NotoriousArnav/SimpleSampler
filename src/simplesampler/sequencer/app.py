@@ -263,9 +263,6 @@ class SequencerApp(App):
 
     def compose(self) -> ComposeResult:
         total_steps = self.sequence.total_steps
-        pat_name = self._current_pattern_name()
-        pat_count = len(self.sequence.patterns)
-        sig = self.sequence.time_signature
 
         yield Label(
             self._status_text(),
@@ -337,8 +334,11 @@ class SequencerApp(App):
 
         pending = ""
         if self._pending_pattern is not None:
-            pend_name = self.sequence.patterns[self._pending_pattern].name
-            pending = f" \u2192 {pend_name}"
+            if 0 <= self._pending_pattern < len(self.sequence.patterns):
+                pend_name = self.sequence.patterns[self._pending_pattern].name
+                pending = f" \u2192 {pend_name}"
+            else:
+                self._pending_pattern = None
 
         return (
             f"BPM: {bpm} | {sig[0]}/{sig[1]} | "
@@ -636,6 +636,11 @@ class SequencerApp(App):
         if len(self.sequence.patterns) <= 1:
             return  # Can't delete the last pattern
         idx = self.sequence.active_pattern
+        # Clear pending pattern references on both app and engine BEFORE
+        # mutating the list — avoids the engine daemon thread applying a
+        # stale index between the pop and the cleanup.
+        self._pending_pattern = None
+        self.engine._pending_pattern = None
         self.sequence.patterns.pop(idx)
         if self.sequence.active_pattern >= len(self.sequence.patterns):
             self.sequence.active_pattern = len(self.sequence.patterns) - 1
@@ -665,13 +670,27 @@ class SequencerApp(App):
         if not os.path.isfile(path):
             self.notify(f"File not found: {path}", severity="warning")
             return
+        # Stop engine before swapping the sequence to avoid racing the
+        # daemon thread which reads self.sequence on every step tick.
+        was_playing = self.engine.playing
+        if was_playing:
+            self.engine.stop()
+            self._playhead = -1
+            self._pending_pattern = None
+            self._clear_playhead()
         try:
             self.sequence = SequenceFile.load(path)
             self.engine.sequence = self.sequence
+            self.engine._pending_pattern = None
             self._sync_grid_from_sequence()
             self._update_cursor()
             self._refresh_status()
-            self.notify(f"Loaded: {path}", severity="information")
+            if was_playing:
+                self.notify(
+                    f"Loaded: {path} (playback stopped)", severity="information"
+                )
+            else:
+                self.notify(f"Loaded: {path}", severity="information")
         except Exception as e:
             self.notify(f"Load failed: {e}", severity="error")
 

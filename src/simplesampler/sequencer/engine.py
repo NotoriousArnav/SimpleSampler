@@ -65,6 +65,7 @@ class SequencerEngine:
             self._click_accent = generate_click(1760.0, 0.02, min(vol * 1.3, 1.0))
 
         self._playing = False
+        self._starting = False  # True while count-in is in progress
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._current_step = 0
@@ -74,7 +75,7 @@ class SequencerEngine:
 
     @property
     def playing(self) -> bool:
-        return self._playing
+        return self._playing or self._starting
 
     @property
     def current_step(self) -> int:
@@ -87,11 +88,12 @@ class SequencerEngine:
 
     def start(self):
         """Start playback with count-in."""
-        if self._playing:
+        if self._playing or self._starting:
             return
         # Wait for previous daemon thread to finish if still alive
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=1.0)
+        self._starting = True
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -105,6 +107,7 @@ class SequencerEngine:
         """
         self._stop_event.set()
         self._playing = False
+        self._starting = False
         self._current_step = 0
 
     def _step_interval(self) -> float:
@@ -113,6 +116,15 @@ class SequencerEngine:
 
     def _run(self):
         """Main playback loop — count-in then step through pattern."""
+        try:
+            self._run_inner()
+        finally:
+            self._playing = False
+            self._starting = False
+            self._current_step = 0
+
+    def _run_inner(self):
+        """Actual playback logic, wrapped by _run for cleanup."""
         interval = self._step_interval()
         beats_per_bar = self.sequence.time_signature[0]
 
@@ -143,6 +155,7 @@ class SequencerEngine:
 
         # --- Playback loop ---
         self._playing = True
+        self._starting = False
         self._current_step = 0
         if self.on_playback_start:
             self.on_playback_start()
@@ -196,6 +209,3 @@ class SequencerEngine:
             if sleep_dur > 0:
                 if self._stop_event.wait(timeout=sleep_dur):
                     break
-
-        self._playing = False
-        self._current_step = 0

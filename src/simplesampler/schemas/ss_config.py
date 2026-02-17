@@ -9,8 +9,9 @@ If not found, all defaults apply silently.
 """
 
 import os
+import sys
 import tomllib
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Tuple
 
 
@@ -52,8 +53,12 @@ def load_config(override_path: str | None = None) -> SSConfig:
 
     for path in paths:
         if os.path.isfile(path):
-            with open(path, "rb") as f:
-                data = tomllib.load(f)
-            return SSConfig.model_validate(data)
+            try:
+                with open(path, "rb") as f:
+                    data = tomllib.load(f)
+                return SSConfig.model_validate(data)
+            except (tomllib.TOMLDecodeError, ValidationError) as e:
+                print(f"Warning: ignoring bad config {path}: {e}", file=sys.stderr)
+                continue
 
     return SSConfig()
